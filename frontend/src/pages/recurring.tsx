@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/page-header'
 import { CategorySelect } from '@/components/category-select'
 import { DatePickerInput } from '@/components/ui/date-picker-input'
+import { RecurringProgressCard } from '@/components/recurring-progress-card'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
 import { useWorkspace } from '@/contexts/workspace-context'
@@ -76,6 +77,11 @@ function RecurringTab() {
   const { data: recurringList } = useQuery({
     queryKey: ['recurring'],
     queryFn: recurringApi.list,
+  })
+
+  const { data: recurringProgress, isLoading: progressLoading } = useQuery({
+    queryKey: ['recurring', 'progress'],
+    queryFn: () => recurringApi.progress(),
   })
 
   const { data: categoriesList } = useQuery({
@@ -160,6 +166,13 @@ function RecurringTab() {
 
   return (
     <>
+      <RecurringProgressCard
+        progress={recurringProgress}
+        isLoading={progressLoading}
+        locale={locale}
+        mask={mask}
+        variant="page"
+      />
       <SectionCard>
         <SectionHeader
           title={t('recurring.title')}

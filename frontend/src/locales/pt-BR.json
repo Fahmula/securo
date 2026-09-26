@@ -1449,7 +1449,19 @@
     "autoGenerate": "Gerar transações automaticamente",
     "autoGenerateHelp": "Cria uma transação sempre que esta conta vence. Desative para aguardar o lançamento real (por exemplo, da sincronização bancária) e mostrá-la apenas como prevista até lá.",
     "fxEstimate": "Estimativa baseada na última taxa de câmbio ({{rate}}). O valor final pode mudar.",
-    "confirmDeleteDescription": "A definição recorrente \"{{description}}\" será excluída permanentemente. As transações existentes permanecerão, mas perderão o vínculo recorrente. Esta ação não pode ser desfeita."
+    "confirmDeleteDescription": "A definição recorrente \"{{description}}\" será excluída permanentemente. As transações existentes permanecerão, mas perderão o vínculo recorrente. Esta ação não pode ser desfeita.",
+    "monthlyProgress": "Progresso Mensal",
+    "thisMonth": "Este Mês",
+    "total": "Total",
+    "paid": "Pago",
+    "remaining": "Restante",
+    "paidOfTotal": "{{paid}} de {{total}} pagos",
+    "billsRemaining": "{{amount}} restantes",
+    "billsPaidCount": "{{paid}} de {{total}} contas pagas",
+    "dashboardTitle": "Contas Recorrentes",
+    "viewAll": "Ver todas",
+    "allBillsPaid": "Todas as contas recorrentes deste mês foram pagas",
+    "noBillsThisMonth": "Nenhuma conta recorrente vence este mês"
   },
   "rules": {
     "searchPlaceholder": "Buscar regras...",

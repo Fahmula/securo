@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format } from 'date-fns'
-import { dashboard, transactions, budgets, categories as categoriesApi, categoryGroups as categoryGroupsApi, accounts as accountsApi, goals as goalsApi, groups as groupsApi, payees as payeesApi, rules as rulesApi } from '@/lib/api'
+import { dashboard, transactions, budgets, categories as categoriesApi, categoryGroups as categoryGroupsApi, accounts as accountsApi, goals as goalsApi, groups as groupsApi, payees as payeesApi, rules as rulesApi, recurring as recurringApi } from '@/lib/api'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -50,9 +50,11 @@ import { extractApiError } from '@/lib/api-errors'
 import { TransactionCalendarView } from '@/components/transaction-calendar-view'
 import { TransactionsViewSwitcher, type TransactionsViewMode } from '@/components/transactions-view-switcher'
 import { RuleDialog, type RuleDialogInitialData } from '@/components/rule-dialog'
+import { RecurringProgressCard } from '@/components/recurring-progress-card'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { useAuth } from '@/contexts/auth-context'
+import { useWorkspace } from '@/contexts/workspace-context'
 import { useCollectionFilter } from '@/contexts/collection-filter-context'
 import { resolveDateFnsLocale } from '@/lib/date-fns-locale'
 import type { Rule, Transaction } from '@/types'
@@ -96,6 +98,7 @@ export default function DashboardPage() {
   const { mask, privacyMode, MASK } = usePrivacyMode()
   const isMobile = useIsMobile()
   const { user } = useAuth()
+  const { hasModule } = useWorkspace()
   const userCurrency = user?.preferences?.currency_display ?? 'USD'
   const displayName = user?.preferences?.display_name || ''
   const locale = useDisplayLocale()
@@ -245,6 +248,12 @@ export default function DashboardPage() {
   const { data: projectedTxs, isLoading: projectedTxLoading } = useQuery({
     queryKey: ['dashboard', 'projected-transactions', selectedMonth],
     queryFn: () => dashboard.projectedTransactions({ month: monthParam }),
+  })
+
+  const { data: recurringProgress, isLoading: recurringProgressLoading } = useQuery({
+    queryKey: ['recurring', 'progress', selectedMonth],
+    queryFn: () => recurringApi.progress(monthParam),
+    enabled: !hasModule || hasModule('recurring'),
   })
 
   const { data: budgetComparison } = useQuery({
@@ -425,7 +434,8 @@ export default function DashboardPage() {
   // realised figure, so a month with nothing pending stays quiet.
   const projectedIncome = Number(summary?.projected_income_primary ?? summary?.projected_income ?? income)
   const projectedExpenses = Number(summary?.projected_expenses_primary ?? summary?.projected_expenses ?? expenses)
-  const savingsRate = income > 0 ? ((income - expenses) / income) * 100 : 0
+  const savingsAmount = income - expenses
+  const savingsRate = income > 0 ? (savingsAmount / income) * 100 : 0
   const isCurrentMonth = selectedMonth === currentMonth()
   const daysElapsed = isCurrentMonth ? new Date().getDate() : monthLastDay(selectedMonth)
   const daysInMonth = monthLastDay(selectedMonth)
@@ -609,6 +619,20 @@ export default function DashboardPage() {
   const savingsRateDisplay = income === 0 && expenses > 0
     ? '---'
     : `${savingsRate.toFixed(0)}%`
+
+  const savingsAmountColor = savingsAmount > 0
+    ? 'text-emerald-600'
+    : savingsAmount < 0
+      ? 'text-rose-500'
+      : 'text-muted-foreground'
+
+  const savingsAmountDisplay = mask(
+    savingsAmount > 0
+      ? `+${formatCurrency(savingsAmount, primaryCurrency, locale)}`
+      : savingsAmount < 0
+        ? `-${formatCurrency(Math.abs(savingsAmount), primaryCurrency, locale)}`
+        : formatCurrency(0, primaryCurrency, locale),
+  )
 
   return (
     <div>
@@ -846,6 +870,9 @@ export default function DashboardPage() {
               <>
                 <p className={`text-xl font-bold tabular-nums ${savingsRateColor}`}>
                   {savingsRateDisplay}
+                </p>
+                <p className={`text-xs font-semibold tabular-nums mt-0.5 ${savingsAmountColor}`}>
+                  {savingsAmountDisplay}
                 </p>
                 <p className="text-[10px] text-muted-foreground mt-0.5">{t('dashboard.savingsRateCaption')}</p>
               </>
@@ -1210,6 +1237,15 @@ export default function DashboardPage() {
             })}
           </div>
         </div>
+      {/* Recurring Bills Progress */}
+      {(!hasModule || hasModule('recurring')) && (
+        <RecurringProgressCard
+          progress={recurringProgress}
+          isLoading={recurringProgressLoading}
+          locale={locale}
+          mask={mask}
+          variant="dashboard"
+        />
       )}
 
       {/* Period Transactions */}

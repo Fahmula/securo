@@ -629,6 +629,18 @@ export interface ProjectedTransaction {
   category_color: string | null
 }
 
+export interface RecurringMonthlyProgress {
+  month: string
+  total: number
+  paid: number
+  remaining: number
+  percentage: number
+  currency: string
+  count_total: number
+  count_paid: number
+  count_remaining: number
+}
+
 export interface TransactionCalendarItem {
   kind: 'actual' | 'projected'
   id: string | null

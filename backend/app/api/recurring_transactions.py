@@ -1,6 +1,8 @@
 import uuid
+from datetime import date
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_async_session
@@ -10,6 +12,7 @@ from app.core.workspace_context import (
     current_writable_workspace,
 )
 from app.schemas.recurring_transaction import (
+    RecurringMonthlyProgress,
     RecurringTransactionCreate,
     RecurringTransactionRead,
     RecurringTransactionUpdate,
@@ -17,6 +20,18 @@ from app.schemas.recurring_transaction import (
 from app.services import recurring_transaction_service
 
 router = APIRouter(prefix="/api/recurring-transactions", tags=["recurring-transactions"])
+
+
+@router.get("/progress", response_model=RecurringMonthlyProgress)
+async def get_recurring_progress(
+    month: Optional[date] = Query(None),
+    type: str = Query("debit"),
+    ctx: WorkspaceContext = Depends(current_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await recurring_transaction_service.get_recurring_monthly_progress(
+        session, ctx.workspace.id, ctx.user_id, month=month, transaction_type=type
+    )
 
 
 @router.get("", response_model=list[RecurringTransactionRead])

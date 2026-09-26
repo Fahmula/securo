@@ -1448,7 +1448,19 @@
     "autoGenerate": "Generate transactions automatically",
     "autoGenerateHelp": "Create a transaction each time this bill is due. Turn off to wait for the real charge (e.g. from bank sync) and only show it as upcoming until then.",
     "fxEstimate": "Estimate based on latest exchange rate ({{rate}}). Final amount may change.",
-    "confirmDeleteDescription": "The recurring definition \"{{description}}\" will be permanently deleted. Existing transactions will remain but lose their recurring link. This action cannot be undone."
+    "confirmDeleteDescription": "The recurring definition \"{{description}}\" will be permanently deleted. Existing transactions will remain but lose their recurring link. This action cannot be undone.",
+    "monthlyProgress": "Monthly Progress",
+    "thisMonth": "This Month",
+    "total": "Total",
+    "paid": "Paid",
+    "remaining": "Remaining",
+    "paidOfTotal": "{{paid}} of {{total}} paid",
+    "billsRemaining": "{{amount}} remaining",
+    "billsPaidCount": "{{paid}} of {{total}} bills paid",
+    "dashboardTitle": "Recurring Bills",
+    "viewAll": "View all",
+    "allBillsPaid": "All recurring bills for this month have been paid",
+    "noBillsThisMonth": "No recurring bills due this month"
   },
   "rules": {
     "searchPlaceholder": "Search rules...",

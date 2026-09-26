@@ -1,20 +1,28 @@
 import calendar
 import uuid
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.app_clock import app_today, get_workspace_timezone, today_in
+from app.core.config import get_settings
 from app.models.account import Account
 from app.models.bank_connection import BankConnection
+from app.models.category import Category
 from app.models.recurring_transaction import RecurringTransaction
 from app.models.transaction import Transaction
-from app.schemas.recurring_transaction import RecurringTransactionCreate, RecurringTransactionUpdate
+from app.models.user import User
+from app.schemas.recurring_transaction import (
+    RecurringMonthlyProgress,
+    RecurringTransactionCreate,
+    RecurringTransactionUpdate,
+)
 from app.services import recurring_match_service
 from app.services.credit_card_service import apply_effective_date
-from app.services.fx_rate_service import stamp_primary_amount
+from app.services.fx_rate_service import get_rate, stamp_primary_amount
 
 
 async def _verify_account_in_workspace(
@@ -398,3 +406,168 @@ async def generate_pending(
 
     await session.commit()
     return count
+
+
+async def get_recurring_monthly_progress(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    month: Optional[date] = None,
+    transaction_type: str = "debit",
+) -> RecurringMonthlyProgress:
+    """Calculate the monthly progress of recurring obligations (total expected,
+    amount already posted, and amount remaining)."""
+    user = await session.get(User, user_id)
+    primary_currency = user.primary_currency if user else get_settings().default_currency
+
+    if month is None:
+        month = app_today().replace(day=1)
+    else:
+        month = month.replace(day=1)
+
+    year = month.year
+    m = month.month
+    range_start = date(year, m, 1)
+    range_end = date(year + 1, 1, 1) if m == 12 else date(year, m + 1, 1)
+    month_str = f"{year:04d}-{m:02d}"
+
+    # 1. Fetch active recurring rules of the requested direction in the workspace
+    stmt = (
+        select(RecurringTransaction)
+        .outerjoin(Category, RecurringTransaction.category_id == Category.id)
+        .where(
+            RecurringTransaction.workspace_id == workspace_id,
+            RecurringTransaction.is_active == True,
+            RecurringTransaction.type == transaction_type,
+            RecurringTransaction.start_date < range_end + timedelta(days=2),
+            or_(
+                RecurringTransaction.end_date.is_(None),
+                RecurringTransaction.end_date >= range_start - timedelta(days=2),
+            ),
+            or_(
+                RecurringTransaction.category_id.is_(None),
+                Category.is_ignored.is_not(True),
+            ),
+        )
+    )
+    result = await session.execute(stmt)
+    recurring_list = list(result.scalars().all())
+
+    # 2. Fetch all real transactions in this month linked to recurring rules
+    tx_stmt = select(Transaction).where(
+        Transaction.workspace_id == workspace_id,
+        Transaction.recurring_transaction_id.is_not(None),
+        Transaction.type == transaction_type,
+        Transaction.date >= range_start,
+        Transaction.date < range_end,
+        Transaction.is_ignored.is_not(True),
+    )
+    tx_result = await session.execute(tx_stmt)
+    linked_txs = list(tx_result.scalars().all())
+
+    # Group linked transactions by recurring_transaction_id
+    txs_by_recurring: dict[uuid.UUID, list[Transaction]] = {}
+    for tx in linked_txs:
+        if tx.recurring_transaction_id:
+            txs_by_recurring.setdefault(tx.recurring_transaction_id, []).append(tx)
+
+    total_paid = Decimal("0.00")
+    total_remaining = Decimal("0.00")
+    count_paid = 0
+    count_remaining = 0
+
+    processed_recurring_ids: set[uuid.UUID] = set()
+
+    for rec in recurring_list:
+        processed_recurring_ids.add(rec.id)
+        occurrences = get_occurrences_in_range(
+            start=rec.start_date,
+            frequency=rec.frequency,
+            end_date=rec.end_date,
+            range_start=range_start,
+            range_end=range_end,
+            intended_day=rec.day_of_month or rec.start_date.day,
+            weekend_adjustment=rec.weekend_adjustment,
+        )
+        expected_count = len(occurrences)
+
+        # Convert recurring nominal amount to primary currency
+        if rec.currency == primary_currency:
+            rec_rate = Decimal("1.0")
+        else:
+            resolved_rate = await get_rate(session, rec.currency, primary_currency, range_start)
+            rec_rate = resolved_rate if resolved_rate is not None else Decimal("1.0")
+        rec_nominal_primary = (rec.amount * rec_rate).quantize(Decimal("0.01"))
+
+        rec_txs = txs_by_recurring.get(rec.id, [])
+        posted_txs = [tx for tx in rec_txs if tx.status == "posted"]
+        pending_txs = [tx for tx in rec_txs if tx.status == "pending"]
+
+        # Paid from posted transactions
+        for tx in posted_txs:
+            if tx.amount_primary is not None:
+                amt = tx.amount_primary
+            elif tx.currency == primary_currency:
+                amt = tx.amount
+            else:
+                r = tx.fx_rate_used or (await get_rate(session, tx.currency, primary_currency, tx.date)) or Decimal("1.0")
+                amt = (tx.amount * Decimal(str(r))).quantize(Decimal("0.01"))
+            total_paid += amt
+            count_paid += 1
+
+        # Remaining from pending transactions
+        for tx in pending_txs:
+            if tx.amount_primary is not None:
+                amt = tx.amount_primary
+            elif tx.currency == primary_currency:
+                amt = tx.amount
+            else:
+                r = tx.fx_rate_used or (await get_rate(session, tx.currency, primary_currency, tx.date)) or Decimal("1.0")
+                amt = (tx.amount * Decimal(str(r))).quantize(Decimal("0.01"))
+            total_remaining += amt
+            count_remaining += 1
+
+        # Remaining unmaterialized occurrences
+        unmaterialized = max(0, expected_count - len(posted_txs) - len(pending_txs))
+        if unmaterialized > 0:
+            total_remaining += unmaterialized * rec_nominal_primary
+            count_remaining += unmaterialized
+
+    # Also account for any linked transactions whose recurring definition is inactive/deleted
+    for rec_id, tx_list in txs_by_recurring.items():
+        if rec_id not in processed_recurring_ids:
+            for tx in tx_list:
+                if tx.amount_primary is not None:
+                    amt = tx.amount_primary
+                elif tx.currency == primary_currency:
+                    amt = tx.amount
+                else:
+                    r = tx.fx_rate_used or (await get_rate(session, tx.currency, primary_currency, tx.date)) or Decimal("1.0")
+                    amt = (tx.amount * Decimal(str(r))).quantize(Decimal("0.01"))
+
+                if tx.status == "posted":
+                    total_paid += amt
+                    count_paid += 1
+                else:
+                    total_remaining += amt
+                    count_remaining += 1
+
+    total_amount = total_paid + total_remaining
+    count_total = count_paid + count_remaining
+    pct = (
+        float((total_paid / total_amount * 100).quantize(Decimal("0.1")))
+        if total_amount > Decimal("0.00")
+        else 0.0
+    )
+
+    return RecurringMonthlyProgress(
+        month=month_str,
+        total=float(total_amount),
+        paid=float(total_paid),
+        remaining=float(total_remaining),
+        percentage=pct,
+        currency=primary_currency,
+        count_total=count_total,
+        count_paid=count_paid,
+        count_remaining=count_remaining,
+    )

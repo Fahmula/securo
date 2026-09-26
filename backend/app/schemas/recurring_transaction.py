@@ -63,3 +63,16 @@ class RecurringTransactionRead(BaseModel):
     fx_rate_used: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class RecurringMonthlyProgress(BaseModel):
+    month: str
+    total: float
+    paid: float
+    remaining: float
+    percentage: float
+    currency: str
+    count_total: int
+    count_paid: int
+    count_remaining: int
+

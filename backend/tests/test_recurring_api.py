@@ -479,3 +479,215 @@ async def test_weekend_adjustment_update_rejects_null_but_allows_omission(
         row for row in list_response.json() if row["id"] == recurring_id
     )
     assert listed["weekend_adjustment"] == "previous_friday"
+
+
+@pytest.mark.asyncio
+async def test_recurring_progress_empty_month(client, auth_headers):
+    """A month with no recurring transactions returns 0 for total, paid, and remaining."""
+    response = await client.get(
+        "/api/recurring-transactions/progress?month=2026-09-01",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["month"] == "2026-09"
+    assert data["total"] == 0.0
+    assert data["paid"] == 0.0
+    assert data["remaining"] == 0.0
+    assert data["percentage"] == 0.0
+    assert data["count_total"] == 0
+    assert data["count_paid"] == 0
+    assert data["count_remaining"] == 0
+
+
+@pytest.mark.asyncio
+async def test_recurring_progress_unposted_and_posted(
+    client, auth_headers, test_account, session, test_user
+):
+    """Test recurring progress transitions correctly from remaining to paid."""
+    import uuid
+    from datetime import date
+    from decimal import Decimal
+    from app.models.transaction import Transaction
+
+    # Create a monthly recurring bill: $500 rent due on the 5th
+    create_res1 = await client.post(
+        "/api/recurring-transactions",
+        json={
+            "description": "Monthly Rent",
+            "amount": 500,
+            "currency": "USD",
+            "type": "debit",
+            "frequency": "monthly",
+            "start_date": "2026-09-01",
+            "day_of_month": 5,
+            "account_id": str(test_account.id),
+        },
+        headers=auth_headers,
+    )
+    assert create_res1.status_code == 201
+    rec1_id = create_res1.json()["id"]
+
+    # Create another monthly bill: $100 Internet due on the 20th
+    create_res2 = await client.post(
+        "/api/recurring-transactions",
+        json={
+            "description": "Internet Fiber",
+            "amount": 100,
+            "currency": "USD",
+            "type": "debit",
+            "frequency": "monthly",
+            "start_date": "2026-09-01",
+            "day_of_month": 20,
+            "account_id": str(test_account.id),
+        },
+        headers=auth_headers,
+    )
+    assert create_res2.status_code == 201
+
+    # At start of month: both are unposted -> total: 600, paid: 0, remaining: 600
+    res_start = await client.get(
+        "/api/recurring-transactions/progress?month=2026-09-01",
+        headers=auth_headers,
+    )
+    assert res_start.status_code == 200
+    start_data = res_start.json()
+    assert start_data["total"] == 600.0
+    assert start_data["paid"] == 0.0
+    assert start_data["remaining"] == 600.0
+    assert start_data["percentage"] == 0.0
+    assert start_data["count_total"] == 2
+    assert start_data["count_paid"] == 0
+    assert start_data["count_remaining"] == 2
+
+    # Now post a transaction for rent ($500)
+    tx = Transaction(
+        user_id=test_user.id,
+        workspace_id=test_account.workspace_id,
+        account_id=test_account.id,
+        description="Monthly Rent",
+        amount=Decimal("500.00"),
+        currency="USD",
+        date=date(2026, 9, 5),
+        effective_date=date(2026, 9, 5),
+        type="debit",
+        source="sync",
+        status="posted",
+        recurring_transaction_id=uuid.UUID(rec1_id),
+    )
+    session.add(tx)
+    await session.commit()
+
+    # After rent posts: total: 600, paid: 500, remaining: 100
+    res_mid = await client.get(
+        "/api/recurring-transactions/progress?month=2026-09-01",
+        headers=auth_headers,
+    )
+    assert res_mid.status_code == 200
+    mid_data = res_mid.json()
+    assert mid_data["total"] == 600.0
+    assert mid_data["paid"] == 500.0
+    assert mid_data["remaining"] == 100.0
+    assert mid_data["percentage"] == pytest.approx(83.3, 0.1)
+    assert mid_data["count_total"] == 2
+    assert mid_data["count_paid"] == 1
+    assert mid_data["count_remaining"] == 1
+
+
+@pytest.mark.asyncio
+async def test_recurring_progress_credit_isolation(
+    client, auth_headers, test_account
+):
+    """Recurring credit (income) transactions are excluded from debit bills progress by default."""
+    # Create recurring income ($3000 salary)
+    create_income = await client.post(
+        "/api/recurring-transactions",
+        json={
+            "description": "Salary",
+            "amount": 3000,
+            "currency": "USD",
+            "type": "credit",
+            "frequency": "monthly",
+            "start_date": "2026-09-01",
+            "account_id": str(test_account.id),
+        },
+        headers=auth_headers,
+    )
+    assert create_income.status_code == 201
+
+    # Debit bills progress should still report 0
+    res_debit = await client.get(
+        "/api/recurring-transactions/progress?month=2026-09-01",
+        headers=auth_headers,
+    )
+    assert res_debit.status_code == 200
+    assert res_debit.json()["total"] == 0.0
+
+    # Credit progress should report 3000
+    res_credit = await client.get(
+        "/api/recurring-transactions/progress?month=2026-09-01&type=credit",
+        headers=auth_headers,
+    )
+    assert res_credit.status_code == 200
+    assert res_credit.json()["total"] == 3000.0
+    assert res_credit.json()["remaining"] == 3000.0
+
+
+@pytest.mark.asyncio
+async def test_recurring_progress_amount_changed(
+    client, auth_headers, test_account, session, test_user
+):
+    """When a recurring bill posts with a different amount (e.g. variable utility bill),
+    the progress reflects the actual paid amount."""
+    import uuid
+    from datetime import date
+    from decimal import Decimal
+    from app.models.transaction import Transaction
+
+    # Create expected $100 electricity bill
+    create_res = await client.post(
+        "/api/recurring-transactions",
+        json={
+            "description": "Electricity",
+            "amount": 100,
+            "currency": "USD",
+            "type": "debit",
+            "frequency": "monthly",
+            "start_date": "2026-09-01",
+            "day_of_month": 15,
+            "account_id": str(test_account.id),
+        },
+        headers=auth_headers,
+    )
+    assert create_res.status_code == 201
+
+    # Actual transaction posts as $115.50
+    tx = Transaction(
+        user_id=test_user.id,
+        workspace_id=test_account.workspace_id,
+        account_id=test_account.id,
+        description="Electricity Actual",
+        amount=Decimal("115.50"),
+        currency="USD",
+        date=date(2026, 9, 15),
+        effective_date=date(2026, 9, 15),
+        type="debit",
+        source="sync",
+        status="posted",
+        recurring_transaction_id=uuid.UUID(create_res.json()["id"]),
+    )
+    session.add(tx)
+    await session.commit()
+
+    res = await client.get(
+        "/api/recurring-transactions/progress?month=2026-09-01",
+        headers=auth_headers,
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["paid"] == 115.5
+    assert data["remaining"] == 0.0
+    assert data["total"] == 115.5
+    assert data["count_paid"] == 1
+    assert data["count_remaining"] == 0
+

@@ -43,6 +43,7 @@ import type {
   InvoiceSettings,
   InvoiceSummary,
   RecurringTransaction,
+  RecurringMonthlyProgress,
   ProjectedTransaction,
   TransactionCalendarResponse,
   Budget,
@@ -1210,6 +1211,12 @@ export const recurring = {
   },
   generate: async (): Promise<{ generated: number }> => {
     const { data } = await api.post('/recurring-transactions/generate')
+    return data
+  },
+  progress: async (month?: string, type?: string): Promise<RecurringMonthlyProgress> => {
+    const { data } = await api.get('/recurring-transactions/progress', {
+      params: { month, type },
+    })
     return data
   },
 }
