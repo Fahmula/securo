@@ -1237,6 +1237,8 @@ export default function DashboardPage() {
             })}
           </div>
         </div>
+      )}
+
       {/* Recurring Bills Progress */}
       {(!hasModule || hasModule('recurring')) && (
         <RecurringProgressCard
